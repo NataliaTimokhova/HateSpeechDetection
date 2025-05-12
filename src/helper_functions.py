@@ -1,3 +1,4 @@
+import random
 import torch
 import wandb
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -5,8 +6,9 @@ from sklearn.metrics import confusion_matrix
 
 import seaborn as sns
 import matplotlib.pyplot as plt
+import pandas as pd
 
-def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
+def train_model(model, train_loader, test_loader, optimizer, device, class_weights_tensor, epochs=1):
     """
     Train the model and validate after each epoch.
     """
@@ -27,7 +29,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
             optimizer.zero_grad()
 
             # Forward pass
-            logits, loss = model(input_ids, attention_mask, labels)
+            logits, loss = model(input_ids, attention_mask, class_weights_tensor, labels)
             loss.backward()
             optimizer.step()
 
@@ -60,7 +62,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
         })
 
         # Call the test_model function for validation after each epoch
-        test_model(model, test_loader, device, phase="val")
+        test_model(model, test_loader, device, class_weights_tensor, phase="val")
 
         # Optionally save model after validation if needed
         # torch.save(model.state_dict(), f"model_epoch_{epoch + 1}.bin")
@@ -68,7 +70,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
 
         
 
-def test_model(model, data_loader, device, phase="test"):
+def test_model(model, data_loader, device, class_weights_tensor, phase="test"):
     """
     Evaluates the model on the validation or test set.
     :param phase: One of ["val", "test"] for validation or final testing. Needed for correct logging with wandb
@@ -86,7 +88,7 @@ def test_model(model, data_loader, device, phase="test"):
         with torch.no_grad():
             # The loss is required to optimise the model (backpropagation) and is no longer important for testing. 
             # But to make coding easier we opted to not do the case destinction
-            logits, loss = model(input_ids, attention_mask, labels)
+            logits, loss = model(input_ids, attention_mask, class_weights_tensor, labels)
 
         preds = torch.argmax(logits, dim=1)
         all_preds.extend(preds.cpu().numpy())
@@ -124,3 +126,55 @@ def test_model(model, data_loader, device, phase="test"):
         wandb.finish()
 
     return
+
+
+def get_class_distribution(dataset, label):
+    """
+    Determines the class distribution i.e. how many elements a class has
+    """
+    labels = dataset[label].tolist()
+    distribution = {}
+    for i in range(len(labels)):
+        target = labels[i]
+        if target not in distribution:
+            distribution[target] = 0
+        distribution[target] += 1
+    return distribution
+
+def get_target_text_by_label(dataset, label, label_value):
+    """
+    Extracts only a specific class from a pandas dataframe
+    """
+    target_text = []
+    texts = dataset["text"].tolist()
+    labels = dataset[label].tolist()
+    for i in range(len(labels)):
+        if labels[i] == label_value:
+            target_text.append(texts[i])
+    return target_text
+
+def oversample_dataset(dataset, label):
+    """
+    Randomly oversamples the dataset and returns a new panda dataframe usable for the HateSpeechDataset
+    """
+    dist = get_class_distribution(dataset, label)
+    highest_class_val = max(dist.values())
+
+    texts = []
+    labels = []
+    for element in dist:
+        # Skipping the class with the most entries
+        target_text = get_target_text_by_label(dataset, label, element)
+        if dist[element] == highest_class_val:
+            for text in target_text:
+                texts.append(text)
+                labels.append(element)
+            continue
+        diff = highest_class_val - len(target_text)
+        oversampled_class = random.choices(target_text, k=diff)
+        for text in target_text + oversampled_class:
+            texts.append(text)
+            labels.append(element)
+    d = {"text": texts, f"{label}": labels}
+    return pd.DataFrame(data=d)
+
