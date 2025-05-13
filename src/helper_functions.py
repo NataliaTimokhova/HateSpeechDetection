@@ -8,10 +8,34 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
 
+
+class AttentionPooling(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_size, 128),
+            nn.Tanh(),
+            nn.Linear(128, 1),
+        )
+
+    def forward(self, hidden_states, mask):
+        # mask: (batch_size, seq_len)
+        scores = self.attention(hidden_states).squeeze(-1)  # (batch_size, seq_len)
+        scores = scores.masked_fill(mask == 0, -1e9)  # Mask padding
+        weights = torch.softmax(scores, dim=1)  # (batch_size, seq_len)
+        weighted_sum = torch.sum(hidden_states * weights.unsqueeze(-1), dim=1)
+        return weighted_sum
+
+
 def train_model(model, train_loader, test_loader, optimizer, device, class_weights_tensor, epochs=1):
     """
     Train the model and validate after each epoch.
     """
+    
+    best_f1 = 0.0
+    best_acc = 0.0
+    best_model_path = "best_model.pt"
+
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}")
         
@@ -62,10 +86,17 @@ def train_model(model, train_loader, test_loader, optimizer, device, class_weigh
         })
 
         # Call the test_model function for validation after each epoch
-        test_model(model, test_loader, device, class_weights_tensor, phase="val")
+        val_metrics = test_model(model, test_loader, device, class_weights_tensor, phase="val")
 
-        # Optionally save model after validation if needed
-        # torch.save(model.state_dict(), f"model_epoch_{epoch + 1}.bin")
+        # Save best model after validation
+        if (
+            val_metrics["f1"] > best_f1 or 
+            (val_metrics["f1"] == best_f1 and val_metrics["accuracy"] > best_acc)
+        ):
+            best_f1 = val_metrics["f1"]
+            best_acc = val_metrics["accuracy"]
+            torch.save(model.state_dict(), best_model_path)
+            print(f"New best model saved (F1: {best_f1:.4f}, Acc: {best_acc:.4f})")
 
 
         
@@ -125,7 +156,7 @@ def test_model(model, data_loader, device, class_weights_tensor, phase="test"):
         wandb.log({"confusion_matrix": wandb.Image(fig)})
         wandb.finish()
 
-    return
+    return {"f1": f1, "accuracy": acc}
 
 
 def get_class_distribution(dataset, label):
@@ -178,3 +209,22 @@ def oversample_dataset(dataset, label):
     d = {"text": texts, f"{label}": labels}
     return pd.DataFrame(data=d)
 
+def undersample_dataset(dataset, label):
+    """
+    Randomly undersamples the dataset and returns a new pandas DataFrame usable for the HateSpeechDataset.
+    """
+    dist = get_class_distribution(dataset, label)
+    lowest_class_val = min(dist.values())
+
+    texts = []
+    labels = []
+    for element in dist:
+        target_text = get_target_text_by_label(dataset, label, element)
+        # Random selection of lowest_class_val many texts from each class
+        undersampled_class = random.sample(target_text, lowest_class_val)
+        for text in undersampled_class:
+            texts.append(text)
+            labels.append(element)
+    
+    d = {"text": texts, f"{label}": labels}
+    return pd.DataFrame(data=d)
