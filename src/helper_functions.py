@@ -2,6 +2,7 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset
 import wandb
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.metrics import confusion_matrix
@@ -9,6 +10,21 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
+
+# Custom Dataset Class
+class HateSpeechDataset(Dataset):
+    def __init__(self, df, tokenizer, label = 'label', max_len=128):
+        self.texts = df["text"].tolist()
+        self.labels = df[label].tolist()
+        self.encodings = tokenizer(self.texts, padding=True, truncation=True, max_length=max_len)
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+
+    def __len__(self):
+        return len(self.labels)
 
 
 class AttentionPooling(nn.Module):
@@ -127,7 +143,11 @@ def test_model(model, data_loader, device, phase="test"):
         with torch.no_grad():
             # The loss is required to optimise the model (backpropagation) and is no longer important for testing. 
             # But to make coding easier we opted to not do the case destinction
-            logits, loss = model(input_ids, attention_mask, model.class_weights, labels)
+            logits, loss = model(
+                input_ids=input_ids, 
+                attention_mask=attention_mask,
+                class_weights_tensor=model.class_weights, 
+                labels=labels)
 
         preds = torch.argmax(logits, dim=1)
         all_preds.extend(preds.cpu().numpy())
