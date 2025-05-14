@@ -1,5 +1,7 @@
 import random
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import wandb
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.metrics import confusion_matrix
@@ -12,22 +14,28 @@ import pandas as pd
 class AttentionPooling(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
+        self.layernorm = nn.LayerNorm(hidden_size)
+        
+        intermediate_size = hidden_size // 4
         self.attention = nn.Sequential(
-            nn.Linear(hidden_size, 128),
+            nn.Linear(hidden_size, intermediate_size),
             nn.Tanh(),
-            nn.Linear(128, 1),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_size, 1),
         )
 
     def forward(self, hidden_states, mask):
+        hidden_states = self.layernorm(hidden_states)
         # mask: (batch_size, seq_len)
         scores = self.attention(hidden_states).squeeze(-1)  # (batch_size, seq_len)
         scores = scores.masked_fill(mask == 0, -1e9)  # Mask padding
-        weights = torch.softmax(scores, dim=1)  # (batch_size, seq_len)
-        weighted_sum = torch.sum(hidden_states * weights.unsqueeze(-1), dim=1)
+        attn_weights = torch.softmax(scores / 0.7, dim=1)  # softer softmax # (batch_size, seq_len)
+        weighted_sum = torch.sum(hidden_states * attn_weights.unsqueeze(-1), dim=1)
+        
         return weighted_sum
 
 
-def train_model(model, train_loader, test_loader, optimizer, device, class_weights_tensor, epochs=1):
+def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
     """
     Train the model and validate after each epoch.
     """
@@ -53,7 +61,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, class_weigh
             optimizer.zero_grad()
 
             # Forward pass
-            logits, loss = model(input_ids, attention_mask, class_weights_tensor, labels)
+            logits, loss = model(input_ids, attention_mask, model.class_weights, labels)
             loss.backward()
             optimizer.step()
 
@@ -77,7 +85,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, class_weigh
         # Log results
         wandb.log({
             "epoch": epoch + 1,
-            "train_loss": loss.item(),
+            "train_loss": avg_train_loss,
             "train_accuracy": acc,
             "train_precision_macro": prec,
             "train_recall_macro": rec,
@@ -86,7 +94,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, class_weigh
         })
 
         # Call the test_model function for validation after each epoch
-        val_metrics = test_model(model, test_loader, device, class_weights_tensor, phase="val")
+        val_metrics = test_model(model, test_loader, device, phase="val")
 
         # Save best model after validation
         if (
@@ -101,7 +109,7 @@ def train_model(model, train_loader, test_loader, optimizer, device, class_weigh
 
         
 
-def test_model(model, data_loader, device, class_weights_tensor, phase="test"):
+def test_model(model, data_loader, device, phase="test"):
     """
     Evaluates the model on the validation or test set.
     :param phase: One of ["val", "test"] for validation or final testing. Needed for correct logging with wandb
@@ -119,7 +127,7 @@ def test_model(model, data_loader, device, class_weights_tensor, phase="test"):
         with torch.no_grad():
             # The loss is required to optimise the model (backpropagation) and is no longer important for testing. 
             # But to make coding easier we opted to not do the case destinction
-            logits, loss = model(input_ids, attention_mask, class_weights_tensor, labels)
+            logits, loss = model(input_ids, attention_mask, model.class_weights, labels)
 
         preds = torch.argmax(logits, dim=1)
         all_preds.extend(preds.cpu().numpy())
