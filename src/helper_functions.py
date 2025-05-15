@@ -186,6 +186,29 @@ def test_model(model, data_loader, device, phase="test"):
 
     return {"f1": f1, "accuracy": acc}
 
+def unfreeze_last_n_layers(model, n_layers=2):
+    """
+    Unfreezes the last `n_layers` of the Transformer encoder.
+    Assumes the transformer model has an encoder with a `layer` attribute.
+    """
+    # Freeze all parameters first
+    for param in model.base.parameters():
+        param.requires_grad = False
+
+    # Unfreeze the last n transformer layers
+    encoder_layers = model.base.encoder.layer
+    for layer in encoder_layers[-n_layers:]:
+        for param in layer.parameters():
+            param.requires_grad = True
+
+    # Optionally unfreeze LayerNorm and pooler if available
+    if hasattr(model.base, "pooler"):
+        for param in model.base.pooler.parameters():
+            param.requires_grad = True
+
+    if hasattr(model.base, "embeddings") and hasattr(model.base.embeddings, "LayerNorm"):
+        for param in model.base.embeddings.LayerNorm.parameters():
+            param.requires_grad = True
 
 def get_class_distribution(dataset, label):
     """
