@@ -51,14 +51,13 @@ class AttentionPooling(nn.Module):
         return weighted_sum
 
 
-def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
+def train_model(model, train_loader, test_loader, optimizer, device, epochs=1, best_model_path = 'best_model.pt', scheduler = False):
     """
     Train the model and validate after each epoch.
     """
     
     best_f1 = 0.0
     best_acc = 0.0
-    best_model_path = "best_model.pt"
 
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}")
@@ -80,6 +79,9 @@ def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
             logits, loss = model(input_ids, attention_mask, model.class_weights, labels)
             loss.backward()
             optimizer.step()
+
+            if scheduler:
+                scheduler.step()
 
             total_loss += loss.item()
             preds = torch.argmax(logits, dim=1)
@@ -106,7 +108,9 @@ def train_model(model, train_loader, test_loader, optimizer, device, epochs=1):
             "train_precision_macro": prec,
             "train_recall_macro": rec,
             "train_f1_macro": f1,
-            "train_f1_weighted": f1_weighted
+            "train_f1_weighted": f1_weighted,
+            "scheduler": scheduler.__class__.__name__ if scheduler else '',
+            "current_lr": optimizer.param_groups[0]['lr']
         })
 
         # Call the test_model function for validation after each epoch
